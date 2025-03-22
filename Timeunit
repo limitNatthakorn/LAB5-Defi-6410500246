@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: GPL-3.0
+
+pragma solidity >=0.8.2 <0.9.0;
+
+contract RPSCommitReveal {
+    uint public numPlayer = 0;
+    uint public reward = 0;
+    mapping(address => bytes32) public player_commit; // Store the commit hash
+    mapping(address => uint) public player_choice; // Store the revealed choice
+    mapping(address => bool) public player_revealed; // Track if the player has revealed
+    address[] public players;
+
+    uint public numReveal = 0;
+    uint256 public startTime; // Time when the game starts
+    uint256 public timeout = 1 hours; // Timeout period (e.g., 1 hour)
+
+    // Allowed accounts
+    address[4] public allowedAccounts = [
+        0x5B38Da6a701c568545dCfcB03FcB875f56beddC4,
+        0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2,
+        0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db,
+        0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB
+    ];
+
+    // Modifier to check if the sender is allowed
+    modifier onlyAllowed() {
+        bool isAllowed = false;
+        for (uint i = 0; i < allowedAccounts.length; i++) {
+            if (msg.sender == allowedAccounts[i]) {
+                isAllowed = true;
+                break;
+            }
+        }
+        require(isAllowed, "You are not allowed to play this game.");
+        _;
+    }
+
+    // Add a player to the game
+    function addPlayer() public payable onlyAllowed {
+        require(numPlayer < 2, "Game already has 2 players.");
+        if (numPlayer > 0) {
+            require(msg.sender != players[0], "You cannot join twice.");
+        }
+        require(msg.value == 1 ether, "You must send exactly 1 ether.");
+        reward += msg.value;
+        players.push(msg.sender);
+        numPlayer++;
+
+        // Start the timer when the first player joins
+        if (numPlayer == 1) {
+            startTime = block.timestamp;
+        }
+    }
+
+    // Commit phase: Player submits a hash of their choice and a random string
+    function commit(bytes32 commitHash) public onlyAllowed {
+        require(numPlayer == 2, "Game requires 2 players.");
+        require(player_commit[msg.sender] == 0, "You have already committed.");
+        require(block.timestamp <= startTime + timeout, "Commit phase has timed out.");
+        player_commit[msg.sender] = commitHash;
+    }
+
+    // Reveal phase: Player reveals their choice and random string
+    function reveal(uint choice, string memory randomString) public onlyAllowed {
+        require(player_commit[msg.sender] != 0, "You have not committed yet.");
+        require(!player_revealed[msg.sender], "You have already revealed.");
+        require(choice >= 0 && choice <= 2, "Invalid choice."); // 0 - Rock, 1 - Paper, 2 - Scissors
+        require(block.timestamp <= startTime + timeout, "Reveal phase has timed out.");
+
+        // Verify the hash matches the commit
+        bytes32 hash = keccak256(abi.encodePacked(choice, randomString));
+        require(hash == player_commit[msg.sender], "Reveal does not match commit.");
+
+        // Store the revealed choice
+        player_choice[msg.sender] = choice;
+        player_revealed[msg.sender] = true;
+        numReveal++;
+
+        // If both players have revealed, determine the winner
+        if (numReveal == 2) {
+            _checkWinnerAndPay();
+        }
+    }
+
+    // Check the winner and pay the reward
+    function _checkWinnerAndPay() private {
+        uint p0Choice = player_choice[players[0]];
+        uint p1Choice = player_choice[players[1]];
+        address payable account0 = payable(players[0]);
+        address payable account1 = payable(players[1]);
+
+        if ((p0Choice + 1) % 3 == p1Choice) {
+            // Player 1 wins
+            account1.transfer(reward);
+        } else if ((p1Choice + 1) % 3 == p0Choice) {
+            // Player 0 wins
+            account0.transfer(reward);
+        } else {
+            // It's a tie, split the reward
+            account0.transfer(reward / 2);
+            account1.transfer(reward / 2);
+        }
+
+        // Reset the game
+        _resetGame();
+    }
+
+    // Allow players to withdraw their funds if the game times out
+    function withdraw() public onlyAllowed {
+        require(block.timestamp > startTime + timeout, "Game has not timed out yet.");
+        require(numPlayer > 0, "No players in the game.");
+
+        for (uint i = 0; i < players.length; i++) {
+            if (players[i] == msg.sender) {
+                address payable player = payable(players[i]);
+                player.transfer(1 ether);
+                _resetGame();
+                return;
+            }
+        }
+
+        revert("You are not a player in this game.");
+    }
+
+    // Reset the game for new players
+    function _resetGame() private {
+        numPlayer = 0;
+        reward = 0;
+        numReveal = 0;
+        startTime = 0;
+        delete players;
+        for (uint i = 0; i < 2; i++) {
+            player_commit[players[i]] = 0;
+            player_choice[players[i]] = 0;
+            player_revealed[players[i]] = false;
+        }
+    }
+}
